@@ -14,13 +14,32 @@ This is an educational script for me to practice training GPT models. This is cr
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-
+import os
+import argparse
 import math
 
-# hyperparameters
+# Function and script for parsing arguments
+
+def str2bool(input_str: str)->bool:
+    if str.lower(input_str) in ["true", "yes", "1"]:
+        return True
+    else:
+        return False
+
+parser = argparse.ArgumentParser(description="Script for training a GPT model on Shakespearean text")
+parser.add_argument("--full_run", type=str2bool, help="Large model training run", required=True)
+parser.add_argument("--load_model", type=str2bool, help="Load model .pth file", required=True)
+parser.add_argument("--write_output", type=str2bool, help="Write model output to .txt file", required=True)
+
+args = parser.parse_args()
+
+FULL_RUN = args.full_run
+LOAD_MODEL = args.load_model
+WRITE_OUTPUT = args.write_output
+
 batch_size = 64 # independent sequences
 block_size = 256
-max_iters = 5000
+max_iters = 2500 if FULL_RUN else 500
 eval_interval = 500
 learning_rate = 3e-4
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -29,6 +48,7 @@ n_embd = 384
 n_head = 6
 n_layer = 6
 dropout = 0.2
+
 # -------------------
 
 # This simply downloads the dataset as an input.txt file
@@ -216,30 +236,40 @@ class GPTLanguageModel(nn.Module):
         return idx
 
 model = GPTLanguageModel()
-m = model.to(device)
-# print the number of parameters in the model
-print(sum(p.numel() for p in m.parameters())/1e6, 'M parameters')
+if LOAD_MODEL == False or not os.path.exists("model.pth"):
+    m = model.to(device)
+    # print the number of parameters in the model
+    print(sum(p.numel() for p in m.parameters())/1e6, 'M parameters')
+    print(f"Number of iterations: {max_iters}")
 
-# create a PyTorch optimizer
-optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    # create a PyTorch optimizer
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
-for iter in range(max_iters):
+    for iter in range(max_iters):
+        # every once in a while evaluate the loss on train and val sets
+        if iter % eval_interval == 0 or iter == max_iters - 1:
+            losses = estimate_loss()
+            print(f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
 
-    # every once in a while evaluate the loss on train and val sets
-    if iter % eval_interval == 0 or iter == max_iters - 1:
-        losses = estimate_loss()
-        print(f"step {iter}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        # sample a batch of data
+        xb, yb = get_batch('train')
 
-    # sample a batch of data
-    xb, yb = get_batch('train')
+        # evaluate the loss
+        logits, loss = model(xb, yb)
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        optimizer.step()
 
-    # evaluate the loss
-    logits, loss = model(xb, yb)
-    optimizer.zero_grad(set_to_none=True)
-    loss.backward()
-    optimizer.step()
+    # save the model to a .pth file so you don't have to train it each time
+    torch.save(model.state_dict(), "model.pth")
+else:
+    model.load_state_dict(torch.load("model.pth"))
+    m = model.to(device)
+    model.eval()
+    # print the number of parameters in the model
+    print(sum(p.numel() for p in m.parameters())/1e6, 'M parameters')
 
 # generate from the model
 context = torch.zeros((1, 1), dtype=torch.long, device=device)
-# print(decode(m.generate(context, max_new_tokens=500)[0].tolist()))
-open('more.txt', 'w').write(decode(m.generate(context, max_new_tokens=10000)[0].tolist()))
+if WRITE_OUTPUT:
+    open('more.txt', 'w').write(decode(m.generate(context, max_new_tokens=10000)[0].tolist()))
